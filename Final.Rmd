@@ -1,0 +1,598 @@
+---
+title: "Who votes?"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+---
+# Introduction
+Voter turnout has long since been an issue in the United States. Popular statistics show that only about 50%-60% of the voting-age population actually votes. To truly understand a United State's citizen's view on politics and voting is made up of many complex parts. This model focuses on some of the more directly impactful parts of what makes up a voter in the United States so we can understand what characteristics drives the reason that many aren't too inclined to vote. 
+
+This data comes from a survey given to a random population. To help with bias, the survey answer choices were randomized. 
+
+The survey explored many different aspects of a voter, including their education, income, and all the way to what defines "a good American".
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tidymodels)
+library(janitor)
+library(corrplot)  
+library(discrim)
+library(corrr)
+library(MASS)  
+library(ggplot2)
+library(glmnet)
+library(randomForest)
+library(xgboost)
+library(rpart.plot)
+library(vip)
+tidymodels_prefer()
+set.seed(1738)
+```
+
+## Clean Data
+The data is first cleaned up by the clean_names() function. This standardizes all the variables' names since some may be written differently than each other. By default, all letters are made lowercase and spaces are replaced by underscores. Especially since this data set has so many variables, this will make sure all of them can be accessed easily. 
+```{r}
+voter_data <- read_csv("nonvoters_data.csv", show_col_types = FALSE) %>%
+  clean_names()
+```
+
+
+```{r}
+voter_data <- voter_data %>%
+  select(-weight, -resp_id, -q1, -(q19_1:q19_10), -q22, -(q28_1:q28_8), -(q29_1:q29_10), -(q31:q33)) %>%
+  mutate(voter_category = factor(voter_category, 
+                                 levels = c("always", "sporadic", "rarely/never")),
+         educ = factor(educ, levels = c("College", "Some college", "High school or less")),
+         income_cat = factor(income_cat, 
+                             levels = c("$125k or more", "$75-125k", "$40-75k", "Less than $40k")))
+```
+Since how the weight of the responses were calculated was not included, weight has been omitted as a predictor.
+Response Id was also omitted due to the fact that since it was just used to identify the various respondents, it doesn't actually affect our predictions. 
+Survey question 1 simply asks if the respondent is a US citizen. Since non-citizens can't vote, they are not a part of the population that we are studying here. 
+Survey questions 19, 28, 29, 31, 32, and 33 included mostly missing data, thus those questions have been removed as predictors. With the few that have been included, it would skew the data.
+
+Many of the survey answers were represented by numbers, i.e. 1, 2, 3, 4. Unfortunely, this can cause confusing since the actual number doesn't represent a count, but just one of the answer choices. Thus, for each of the questions that uses this system, their answers are factored to make sure that they aren't confused for a count. 
+
+```{r, include=FALSE}
+voter_data %>%
+  mutate(q2_1 = factor(q2_1, levels = c(1, 2, 3, 4)),
+         q2_2 = factor(q2_2, levels = c(1, 2, 3, 4)),
+         q2_3 = factor(q2_3, levels = c(1, 2, 3, 4)),
+         q2_4 = factor(q2_4, levels = c(1, 2, 3, 4)),
+         q2_5 = factor(q2_5, levels = c(1, 2, 3, 4)),
+         q2_6 = factor(q2_6, levels = c(1, 2, 3, 4)),
+         q2_7 = factor(q2_7, levels = c(1, 2, 3, 4)),
+         q2_8 = factor(q2_8, levels = c(1, 2, 3, 4)),
+         q2_9 = factor(q2_9, levels = c(1, 2, 3, 4)),
+         q2_10 = factor(q2_10, levels = c(1, 2, 3, 4)),
+         q3_1 = factor(q3_1, levels = c(1, 2, 3, 4)),
+         q3_2 = factor(q3_2, levels = c(1, 2, 3, 4)),
+         q3_3 = factor(q3_3, levels = c(1, 2, 3, 4)),
+         q3_4 = factor(q3_4, levels = c(1, 2, 3, 4)),
+         q3_5 = factor(q3_5, levels = c(1, 2, 3, 4)),
+         q3_6 = factor(q3_6, levels = c(1, 2, 3, 4)),
+         q4_1 = factor(q4_1, levels = c(1, 2, 3, 4)),
+         q4_2 = factor(q4_2, levels = c(1, 2, 3, 4)),
+         q4_3 = factor(q4_3, levels = c(1, 2, 3, 4)),
+         q4_4 = factor(q4_4, levels = c(1, 2, 3, 4)),
+         q4_5 = factor(q4_5, levels = c(1, 2, 3, 4)),
+         q4_6 = factor(q4_6, levels = c(1, 2, 3, 4)),
+         q5 = factor(q5, levels = c(1, 2)),
+         q6 = factor(q6, levels = c(1, 2, 3, 4)),
+         q7 = factor(q7, levels = c(1, 2)),
+         q8_1 = factor(q8_1, levels = c(1, 2, 3, 4)),
+         q8_2 = factor(q8_2, levels = c(1, 2, 3, 4)),
+         q8_3 = factor(q8_3, levels = c(1, 2, 3, 4)),
+         q8_4 = factor(q8_4, levels = c(1, 2, 3, 4)),
+         q8_5 = factor(q8_5, levels = c(1, 2, 3, 4)),
+         q8_6 = factor(q8_6, levels = c(1, 2, 3, 4)),
+         q8_7 = factor(q8_7, levels = c(1, 2, 3, 4)),
+         q8_8 = factor(q8_8, levels = c(1, 2, 3, 4)),
+         q8_9 = factor(q8_9, levels = c(1, 2, 3, 4)),
+         q9_1 = factor(q9_1, levels = c(1, 2, 3, 4)),
+         q9_2 = factor(q9_2, levels = c(1, 2, 3, 4)),
+         q9_3 = factor(q9_3, levels = c(1, 2, 3, 4)),
+         q9_4 = factor(q9_4, levels = c(1, 2, 3, 4)),
+         q10_1 = factor(q10_1, levels = c(1, 2)),
+         q10_2 = factor(q10_2, levels = c(1, 2)),
+         q10_3 = factor(q10_3, levels = c(1, 2)),
+         q10_4 = factor(q10_4, levels = c(1, 2)),
+         q11_1 = factor(q11_1, levels = c(1, 2)),
+         q11_2 = factor(q11_2, levels = c(1, 2)),
+         q11_3 = factor(q11_3, levels = c(1, 2)),
+         q11_4 = factor(q11_4, levels = c(1, 2)),
+         q11_5 = factor(q11_5, levels = c(1, 2)),
+         q11_6 = factor(q11_6, levels = c(1, 2)),
+         q14 = factor(q14, levels = c(1, 2, 3, 4, 5)),
+         q15 = factor(q15, levels = c(1, 2, 3, 4, 5)),
+         q16 = factor(q16, levels = c(1, 2, 3, 4)),
+         q17_1 = factor(q17_1, levels = c(1, 2, 3, 4)),
+         q17_2 = factor(q17_2, levels = c(1, 2, 3, 4)),
+         q17_3 = factor(q17_3, levels = c(1, 2, 3, 4)),
+         q17_4 = factor(q17_4, levels = c(1, 2, 3, 4)),
+         q18_1 = factor(q18_1, levels = c(1, 2)),
+         q18_2 = factor(q18_2, levels = c(1, 2)),
+         q18_3 = factor(q18_3, levels = c(1, 2)),
+         q18_4 = factor(q18_4, levels = c(1, 2)),
+         q18_5 = factor(q18_5, levels = c(1, 2)),
+         q18_6 = factor(q18_6, levels = c(1, 2)),
+         q18_7 = factor(q18_7, levels = c(1, 2)),
+         q18_8 = factor(q18_8, levels = c(1, 2)),
+         q18_9 = factor(q18_9, levels = c(1, 2)),
+         q18_10 = factor(q18_10, levels = c(1, 2)),
+         q20 = factor(q20, levels = c(1, 2)),
+         q21 = factor(q21, levels = c(1, 2, 3)),
+         q23 = factor(q23, levels = c(1, 2, 3)),
+         q24 = factor(q24, levels = c(1, 2, 3, 4)),
+         q25 = factor(q25, levels = c(1, 2, 3, 4)),
+         q26 = factor(q26, levels = c(1, 2, 3, 4)),
+         q27_1 = factor(q27_1, levels = c(1, 2)),
+         q27_2 = factor(q27_2, levels = c(1, 2)),
+         q27_3 = factor(q27_3, levels = c(1, 2)),
+         q27_4 = factor(q27_4, levels = c(1, 2)),
+         q27_5 = factor(q27_5, levels = c(1, 2)),
+         q27_6 = factor(q27_6, levels = c(1, 2)),
+         q30 = factor(q30, levels = c(1, 2, 3, 4, 5)),
+         )
+
+```
+
+
+```{r}
+dim(voter_data)
+```
+There are over 5000 respondents with 84 variables. 
+Though there were about 37 questions in the survey (number 12 and 13 were missing from the data set) where 9 were omitted due to the mostly missing data in the clean-up and a response_id to keep track of the different respondents. 
+Survey questions 2, 3, 4, 8, 9, 10, 11, 17, 18, and 27 had multiple parts to them, hence the subscript. 
+
+To start off, let's see how many of these eligible voters actually exercise their right to vote.
+```{r}
+ggplot(voter_data, aes(x=voter_category)) + 
+  geom_bar()
+```
+
+It looks like almost half of our respondents vote sporadically, meaning that they voted in at least 2 elections, but not all the elections that they were eligible for. 
+
+
+# Exploratory Data Analysis
+
+Looking at Voter Category by age
+```{r}
+ggplot(voter_data, aes(x=ppage, y = voter_category)) +
+  geom_boxplot() 
+```
+It's interesting to see how majority of those that always vote belong to a higher age group, and the younger ages rarely vote. 
+
+
+Voter Category vs Party by Race
+
+```{r}
+ggplot(voter_data, aes(voter_category, q30)) +
+  geom_boxplot() +
+  facet_wrap(vars(race))
+```
+Here: 
+1: Republican
+2: Democrat
+3: Independent
+4: Other
+5: No Preference
+
+By the looks of these boxplots, it looks like race may not play a big factor in whether someone votes or not by political party. However, these boxplots do hint at a correlation between race and political party. Only in the white race graph, is there a spread of those who identify as Republican. For respondents who responded as Black however, those who rarely voted seemed to identify as anything but Republic but those who always voted stuck with Democrat.
+
+Voter Category vs Gender, Race, Income Category, Education
+
+```{r}
+ggplot(voter_data, aes(voter_category)) +
+  geom_bar() +
+  facet_wrap(vars(gender))
+
+ggplot(voter_data, aes(voter_category)) +
+  geom_bar() +
+  facet_wrap(vars(race))
+
+ggplot(voter_data, aes(voter_category)) +
+  geom_bar() +
+  facet_wrap(vars(income_cat))
+
+ggplot(voter_data, aes(voter_category)) +
+  geom_bar() +
+  facet_wrap(vars(educ))
+```
+
+Individually looking at gender, race, and income category don't seem to be directly correlated to how often one votes. However, there does seem to be a slight trend with those who have received a college degree tend to vote than not. 
+
+
+
+# Data Splitting
+
+We are splitting the data into training and test sets that are stratified by the outcome variable, voter category. The seed was already set at the beginning of the introduction, so the split will be the same every time. 
+
+```{r}
+set.seed(1738)
+voter_split <- initial_split(voter_data, prop = 0.8, strata = "voter_category")
+
+voter_train <- training(voter_split)
+voter_test <- testing(voter_split)
+```
+
+```{r}
+voter_split
+```
+
+There are 4667 observations in the training dataset and 1169 observations in the testing dataset. 
+
+```{r}
+set.seed(1738)
+voter_fold <- vfold_cv(voter_train, v= 5)
+```
+
+## Recipe
+
+```{r}
+voter_recipe <- recipe(formula = voter_category ~ ., data = voter_train) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_normalize(all_predictors())
+```
+step_normalize will normalize all the predictors such that they will all have a standard deviation of 1 and a mean of 0. This helps create a more standardized relationship between all the different predictors on the same scale. 
+
+
+# Model Fitting
+Using the same recipe, we will be fitting 5 different models: Logistic Regression, Elastic Net Tuning, Classification Tree, Random Forest, and Boosted Tree. For each of them I made sure to set the mode to "classification" since this model is predicting which category a voter will fall into: "always", "sporadic", or "rarely/never". Once I set up the engine specifics, I set up the workflow and fit the model on the training set. 
+
+For each of the models fitted, I first create a confusion matrix to see how well the training set works. Then measured the accuracy and the area under then ROC based on the testing set to see how well the model did with making new predictions.
+
+For the Elastic Net Tuning, Random Forest, and Boosted Tree models, some of their chosen parameters were tuned to find the best model based on the roc_auc value. Then the testing data was tested on each of their best fits to measure the accuracy and the area under then ROC. 
+
+## Logistic Regression
+```{r}
+# Engine Set Up
+log_reg <- logistic_reg() %>%
+  set_engine("glm") %>%
+  set_mode("classification")
+
+# Workflow and Fitting Model
+log_wf <- workflow() %>%
+  add_model(log_reg) %>%
+  add_recipe(voter_recipe)
+
+log_fit <- fit(log_wf, voter_train)
+```
+
+
+```{r}
+augment(log_fit, new_data = voter_train) %>%
+  conf_mat(truth = voter_category, estimate = .pred_class) %>%
+  autoplot(type = "heatmap")
+```
+ According to the heatmap, the logistic regression model looked like it was able to predict the "always" and "sporadic" voter categories accurately. However, it wasn't able to predict when the eligible voters wouldn't vote. It predicted that the majority of the respondents would only sporadically vote when it actually they wouldn't have had. 
+ 
+```{r}
+log_reg_acc <- augment(log_fit, new_data = voter_train) %>%
+  accuracy(truth = voter_category, estimate = .pred_class)
+log_reg_acc
+```
+This model didn't do well, it was accurate only 47% of the time. 
+
+
+## Elastic Net
+For the elastic net model, we used a multinom_reg() and tuned the penalty and mixture parameters. 
+Penalty represents the total amount of regularization while mixture gives the proportion of the regularization. 
+```{r}
+elastic_net_spec <- multinom_reg(penalty = tune(),
+                                 mixture = tune()) %>%
+  set_mode("classification") %>%
+  set_engine("glmnet")
+
+elastic_net_wf <- workflow() %>%
+  add_recipe(voter_recipe) %>%
+  add_model (elastic_net_spec)
+
+en_grid <- grid_regular(penalty(range = c(-5, 5)),
+                        mixture(range = c(0, 1)),
+                        levels = 10)
+```
+
+```{r, eval=FALSE}
+en_tune_res <- tune_grid(
+  elastic_net_wf,
+  resamples = voter_fold,
+  grid = en_grid
+)
+
+save(elastic_net_wf, en_tune_res, file = "data/en_tune.rda")
+```
+
+```{r}
+load("data/en_tune.rda")
+autoplot(en_tune_res)
+```
+The smaller "Amount of Regularization" and smaller "Proportion of Lasso Penalty" result in higher values of both accuracy and ROC AUC. 
+
+```{r}
+best_model <- select_best(en_tune_res, metric = "roc_auc")
+
+en_fin <- finalize_workflow(elastic_net_wf, best_model)
+
+en_fin_fit <- fit(en_fin, data = voter_train)
+
+predicted_data <- augment(en_fin_fit, new_data = voter_test) %>%
+  select(voter_category, starts_with(".pred"))
+```
+
+```{r}
+best_model
+```
+Here, the best model based on the roc_auc value, had a penalty of 0.022 and a mixture of 0.33. 
+
+
+```{r}
+en_auc <- predicted_data %>% roc_auc(voter_category, `.pred_always`:`.pred_rarely/never`)
+en_auc
+```
+```{r}
+predicted_data %>% roc_curve(voter_category, `.pred_always`:`.pred_rarely/never`) %>%
+  autoplot()
+```
+```{r}
+predicted_data %>%
+  conf_mat(truth = voter_category, estimate = .pred_class) %>%
+  autoplot(type = "heatmap")
+```
+
+```{r}
+en_acc <- predicted_data %>%
+  accuracy(truth = voter_category, estimate = .pred_class)
+en_acc
+```
+
+
+This model did much better at predicting than the logistic regression model. It did well predicting when a voter would be sporadic but still had a lot of trouble predicted when an eligible voter would not vote. 
+
+## Classification Tree
+```{r}
+tree_spec <- decision_tree() %>%
+  set_engine("rpart")
+
+class_tree_spec <- tree_spec %>%
+  set_mode("classification")
+
+# Workflow and Fitting Model
+class_tree_wf <- workflow() %>%
+  add_model(class_tree_spec) %>%
+  add_recipe(voter_recipe)
+
+class_tree_fit <- fit(class_tree_wf, voter_train)
+```
+
+```{r}
+class_tree_fit %>%
+  extract_fit_engine() %>%
+  rpart.plot()
+```
+
+```{r}
+augment(class_tree_fit, new_data = voter_test) %>%
+  conf_mat(truth = voter_category, estimate = .pred_class) %>%
+  autoplot(type = "heatmap")
+```
+
+```{r}
+class_acc <- augment(class_tree_fit, new_data = voter_test) %>%
+  accuracy(truth = voter_category, estimate = .pred_class)
+class_acc
+```
+```{r}
+class_auc <- augment(class_tree_fit, new_data = voter_test) %>%
+  roc_auc(truth = voter_category, estimate = `.pred_always`:`.pred_rarely/never`)
+class_auc
+```
+
+## K- Nearest Neighbors
+
+```{r}
+knn <- nearest_neighbor() %>%
+  set_mode("classification") %>%
+  set_engine("kknn")
+```
+
+```{r}
+knn_wf <- workflow() %>%
+  add_model(knn %>% set_args(neighbors = tune())) %>%
+  add_recipe(voter_recipe)
+
+knn_grid <- grid_regular(neighbors(range = c(1, 100)), levels = 10) # change to 10
+
+```
+
+```{r, eval=FALSE}
+knn_tune_res <- tune_grid(
+  knn_wf, 
+  resamples = voter_fold,
+  grid = knn_grid
+)
+
+save(knn_wf, knn_tune_res, file = "data/knn_tune.rda")
+```
+
+```{r}
+load("data/knn_tune.rda")
+autoplot(knn_tune_res)
+```
+
+```{r}
+best_neighbors <- select_best(knn_tune_res, metric = "roc_auc")
+
+knn_final <- finalize_workflow(knn_wf, best_neighbors)
+
+knn_final_fit <- fit(knn_final, data = voter_train)
+```
+
+```{r}
+augment(knn_final_fit, new_data = voter_test) %>%
+  conf_mat(truth = voter_category, estimate = .pred_class) %>%
+  autoplot(type = "heatmap")
+```
+
+```{r}
+knn_acc <- augment(knn_final_fit, new_data = voter_test) %>%
+  accuracy(truth = voter_category, estimate = .pred_class)
+knn_acc
+```
+
+
+```{r}
+knn_auc <- augment(knn_final_fit, new_data = voter_test) %>%
+  roc_auc(truth = voter_category, estimate = `.pred_always`:`.pred_rarely/never`)
+knn_auc
+```
+
+## Random Forest
+```{r}
+rf_spec <- rand_forest() %>%
+  set_mode("classification") %>%
+  set_engine("ranger")
+
+rf_wf <- workflow() %>%
+  add_model(rf_spec %>% set_args(mtry = tune(),
+                                 min_n = tune(),
+                                 trees = tune())) %>%
+  add_recipe(voter_recipe)
+
+rf_grid <- grid_regular(mtry(range = c(1, 85)),
+                        min_n(range = c(5, 20)),
+                        trees(range = c(200, 1000)),
+                        levels = 3)
+```
+
+```{r, eval=FALSE}
+rf_tune_res <- tune_grid(
+  rf_wf,
+  resamples = voter_fold,
+  grid = rf_grid,
+  metrics = metric_set(roc_auc)
+)
+
+save(rf_wf, rf_tune_res, file = "data/rf_tune.rda")
+```
+ 
+ Took about an hour to run
+
+```{r}
+load("data/rf_tune.rda")
+autoplot(rf_tune_res)
+```
+
+```{r}
+best_rf <- select_best(rf_tune_res, metric = "roc_auc")
+
+rf_final <- finalize_workflow(rf_wf, best_rf)
+
+rf_final_fit <- fit(rf_final, data = voter_train)
+```
+
+```{r}
+augment(rf_final_fit, new_data = voter_test) %>%
+  conf_mat(truth = voter_category, estimate = .pred_class) %>%
+  autoplot(type = "heatmap")
+
+rf_acc <- augment(rf_final_fit, new_data = voter_test) %>%
+  accuracy(truth = voter_category, estimate = .pred_class)
+
+rf_auc <- augment(rf_final_fit, new_data = voter_test) %>%
+  roc_auc(truth = voter_category, estimate = `.pred_always`:`.pred_rarely/never`)
+```
+
+```{r}
+rf_acc
+rf_auc
+```
+
+## Boosted Tree Model
+
+```{r}
+boost_spec <- boost_tree() %>%
+  set_engine("xgboost") %>%
+  set_mode("classification")
+
+boost_wf <- workflow() %>%
+  add_model(boost_spec %>% set_args(mtry = tune(),
+                                 min_n = tune(),
+                                 trees = tune())) %>%
+  add_recipe(voter_recipe)
+
+boost_grid <- grid_regular(mtry(range = c(1, 85)),
+                        min_n(range = c(5, 20)),
+                        trees(range = c(200, 1000)),
+                        levels = 5)
+```
+
+```{r, eval=FALSE}
+boost_tune_res <- tune_grid(boost_wf,
+                            resamples = voter_fold,
+                            grid = boost_grid,
+                            metrics = metric_set(roc_auc))
+
+save(boost_wf, boost_tune_res, file = "data/boost_tune.rda")
+```
+ Took about 2 hours to run 
+
+```{r}
+load("data/boost_tune.rda")
+autoplot(boost_tune_res)
+```
+
+```{r}
+best_boost <- select_best(boost_tune_res, metric = "roc_auc")
+
+boost_final <- finalize_workflow(boost_wf, best_boost)
+
+boost_final_fit <- fit(boost_final, data = voter_train)
+```
+
+```{r}
+augment(boost_final_fit, new_data = voter_test) %>%
+  conf_mat(truth = voter_category, estimate = .pred_class) %>%
+  autoplot(type = "heatmap")
+
+boost_acc <- augment(boost_final_fit, new_data = voter_test) %>%
+  accuracy(truth = voter_category, estimate = .pred_class)
+
+boost_auc <- augment(boost_final_fit, new_data = voter_test) %>%
+  roc_auc(truth = voter_category, estimate = `.pred_always`:`.pred_rarely/never`)
+```
+
+```{r}
+boost_acc
+boost_auc
+```
+
+# Model Results
+The Accuracies 
+```{r}
+acc_models <- c("Logistic Regression", "Elastic Net", "Classification Tree", 
+            "K - Nearest Neighbors", "Random Forest", "Boosted Tree")
+accuracies <- c(log_reg_acc$.estimate, en_acc$.estimate, class_acc$.estimate,
+                knn_acc$.estimate, rf_acc$.estimate, boost_acc$.estimate)
+
+tibble(x = acc_models, y = accuracies)
+```
+
+The ROC_AUC values
+```{r}
+auc_models <- c("Elastic Net", "Classification Tree", 
+            "K - Nearest Neighbors", "Random Forest", "Boosted Tree")
+aucs <- c(en_auc$.estimate, class_auc$.estimate, knn_auc$.estimate, 
+          rf_auc$.estimate, boost_auc$.estimate)
+tibble(x = auc_models, y = aucs)
+```
+
+# Conclusion
+Out of all the models that were tested, Random Forest had both the best accuracy and the best roc_auc values. However, accuracy could be increased if this model was needed to be used for voter prediction. Though the roc_auc results were optimal, accuracy was almost a coin flip. There weren't as many non-voters to predict as sporadic voters which could cause some imbalance of data. 
+
+The lack of voter turn out has been a long standing problem in the United States. Finding what motivates eligible voters to vote in this country's elections is crucial to fixing this problem. Starting with models like this to predict who votes and who may not vote, would be the first step. 
