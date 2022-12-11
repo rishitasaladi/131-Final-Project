@@ -227,9 +227,10 @@ voter_split
 
 There are 4667 observations in the training dataset and 1169 observations in the testing dataset. 
 
+Stratified cross validation makes sure that each class is equally represented in each of the folds. This helps with any imbalanced data. 
 ```{r}
 set.seed(1738)
-voter_fold <- vfold_cv(voter_train, v= 5)
+voter_fold <- vfold_cv(voter_train, v= 5, strata = voter_category)
 ```
 
 ## Recipe
@@ -270,7 +271,7 @@ augment(log_fit, new_data = voter_train) %>%
   conf_mat(truth = voter_category, estimate = .pred_class) %>%
   autoplot(type = "heatmap")
 ```
- According to the heatmap, the logistic regression model looked like it was able to predict the "always" and "sporadic" voter categories accurately. However, it wasn't able to predict when the eligible voters wouldn't vote. It predicted that the majority of the respondents would only sporadically vote when it actually they wouldn't have had. 
+ According to the confusion matrix, the logistic regression model looked like it was able to predict the "always" and "sporadic" voter categories accurately. However, it wasn't able to predict when the eligible voters wouldn't vote. It predicted that the majority of the respondents would only sporadically vote when it actually they wouldn't have had. 
  
 ```{r}
 log_reg_acc <- augment(log_fit, new_data = voter_train) %>%
@@ -335,10 +336,13 @@ Here, the best model based on the roc_auc value, had a penalty of 0.022 and a mi
 en_auc <- predicted_data %>% roc_auc(voter_category, `.pred_always`:`.pred_rarely/never`)
 en_auc
 ```
+
 ```{r}
 predicted_data %>% roc_curve(voter_category, `.pred_always`:`.pred_rarely/never`) %>%
   autoplot()
 ```
+The elastic net tuning resulted in a desirable value for the area under the ROC. It did best with the rarely/never voter category compared to the others. 
+
 ```{r}
 predicted_data %>%
   conf_mat(truth = voter_category, estimate = .pred_class) %>%
@@ -351,8 +355,7 @@ en_acc <- predicted_data %>%
 en_acc
 ```
 
-
-This model did much better at predicting than the logistic regression model. It did well predicting when a voter would be sporadic but still had a lot of trouble predicted when an eligible voter would not vote. 
+This model did much better at predicting than the logistic regression model by accuracy. It did well predicting when a voter would be sporadic but still had a lot of trouble predicted when an eligible voter would not vote. 
 
 ## Classification Tree
 ```{r}
@@ -387,6 +390,13 @@ class_acc <- augment(class_tree_fit, new_data = voter_test) %>%
   accuracy(truth = voter_category, estimate = .pred_class)
 class_acc
 ```
+
+```{r}
+augment(class_tree_fit, new_data = voter_test) %>%
+  roc_curve(voter_category, `.pred_always`:`.pred_rarely/never`) %>%
+  autoplot()
+```
+
 ```{r}
 class_auc <- augment(class_tree_fit, new_data = voter_test) %>%
   roc_auc(truth = voter_category, estimate = `.pred_always`:`.pred_rarely/never`)
@@ -406,7 +416,7 @@ knn_wf <- workflow() %>%
   add_model(knn %>% set_args(neighbors = tune())) %>%
   add_recipe(voter_recipe)
 
-knn_grid <- grid_regular(neighbors(range = c(1, 100)), levels = 10) # change to 10
+knn_grid <- grid_regular(neighbors(range = c(1, 100)), levels = 10)
 
 ```
 
@@ -540,7 +550,6 @@ boost_tune_res <- tune_grid(boost_wf,
 
 save(boost_wf, boost_tune_res, file = "data/boost_tune.rda")
 ```
- Took about 2 hours to run 
 
 ```{r}
 load("data/boost_tune.rda")
@@ -571,6 +580,8 @@ boost_auc <- augment(boost_final_fit, new_data = voter_test) %>%
 boost_acc
 boost_auc
 ```
+
+The random forest model and the boosted tree model took the longest to run. Originally, the models were set to 10 levels each, which resulted in both taking over 9 hours to run for each. Hence, I reduced the number of levels to run more efficiently, which ran for about 2 hours each. 
 
 # Model Results
 The Accuracies 
